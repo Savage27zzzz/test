@@ -3,7 +3,7 @@ import math
 from orderbook_pm_challenge.strategy import BaseStrategy
 from orderbook_pm_challenge.types import CancelAll, PlaceOrder, Side, StepState
 
-def _npdf(x): return math.exp(-0.5*x*x)/math.sqrt(2*math.pi)
+def _npdf(x): return math.exp(-0.5*x*x)/2.5066282746310002
 def _icdf(p):
     if p<=1e-10: return -6.0
     if p>=1-1e-10: return 6.0
@@ -14,7 +14,7 @@ def _sticks(p,H):
     if H<=0 or p<=0.01 or p>=0.99: return 0.3
     v=H*0.0004
     if v<1e-15: return 0.3
-    return max(0.2,2*_npdf(_icdf(p))/math.sqrt(v))
+    return max(0.2, 2*_npdf(_icdf(p))/math.sqrt(v))
 
 class Strategy(BaseStrategy):
     def __init__(self):
@@ -35,8 +35,7 @@ class Strategy(BaseStrategy):
         if self.fv is None: self.fv=50.0
         if st.buy_filled_quantity>0 and st.sell_filled_quantity==0: self.fv-=0.5
         elif st.sell_filled_quantity>0 and st.buy_filled_quantity==0: self.fv+=0.5
-        self.fv=max(3,min(97,self.fv))
-        self.pb,self.pa=cb,ca
+        self.fv=max(3,min(97,self.fv)); self.pb,self.pa=cb,ca
 
     def on_step(self,state):
         a=[CancelAll()]
@@ -46,27 +45,26 @@ class Strategy(BaseStrategy):
         obs=ca-cb
         if obs<3: return a
         fv=self.fv; ni=state.yes_inventory-state.no_inventory
-        sk=max(-2.5,min(2.5,-ni*0.015))
-        fvs=max(2,min(98,fv+sk))
         pf=max(0.02,min(0.98,fv/100))
         sig=_sticks(pf,state.steps_remaining)
         
+        sk=max(-6.0,min(6.0,-ni*0.3))
+        fvs=max(2,min(98,fv+sk))
+        
         if sig < 0.55:
             ss=min(20.0, 6.0/max(0.2, sig))
-            cm = 0.55
-            bf = 0.22
-            mi = 300
+            cm=0.55; bf=0.22; mi=300
         elif sig < 0.75:
             ss=min(8.0, 3.0/max(0.3, sig))
-            cm = 0.85
-            bf = 0.16
-            mi = 200
+            cm=0.85; bf=0.16; mi=200
         else:
             ss=max(1.0, 2.0/max(0.5, sig))
-            cm = 1.5
-            bf = 0.12
-            mi = 120
+            cm=1.3; bf=0.12; mi=120
 
+        inv_ratio = min(2.0, max(0.5, 1.0 + ni / max(50, mi)))
+        bid_m = 1.0 / inv_ratio
+        ask_m = inv_ratio
+        
         sb=ni>mi; ss2=ni<-mi
         ac=state.cash
         ls=1.0
@@ -86,12 +84,17 @@ class Strategy(BaseStrategy):
         for off,mc,bq in levels:
             bt=cb+off; at=ca-off
             if bt>=at: continue
-            q=max(0.01,int(bq*ls*100)/100)
+            
+            bq_b = bq * bid_m
+            q=max(0.01,int(bq_b*ls*100)/100)
             if not sb and 1<=bt<=99 and q>=0.01:
                 if fvs>bt+mc:
                     b=q; c=(bt/100)*b
                     if c>ac*bf: b=int((ac*bf)/(bt/100)*100)/100
                     if b>=0.01: a.append(PlaceOrder(side=Side.BUY,price_ticks=bt,quantity=b)); ac-=(bt/100)*b
+            
+            bq_a = bq * ask_m
+            q=max(0.01,int(bq_a*ls*100)/100)
             if not ss2 and 1<=at<=99 and q>=0.01:
                 if fvs<at-mc:
                     s=q; sc=(100-at)/100; cov=max(0,state.yes_inventory)
